@@ -861,9 +861,9 @@ local function applyAAAngles(angles)
     end
     
     if Settings.AntiAim.PitchMode == "Up" then
-        x = math.clamp(x - math.rad(Settings.AntiAim.PitchAngle), math.rad(-89), math.rad(89))
-    elseif Settings.AntiAim.PitchMode == "Down" then
         x = math.clamp(x + math.rad(Settings.AntiAim.PitchAngle), math.rad(-89), math.rad(89))
+    elseif Settings.AntiAim.PitchMode == "Down" then
+        x = math.clamp(x - math.rad(Settings.AntiAim.PitchAngle), math.rad(-89), math.rad(89))
     elseif Settings.AntiAim.PitchMode == "Random" then
         x = math.clamp(math.rad(math.random(-Settings.AntiAim.PitchAngle, Settings.AntiAim.PitchAngle)), math.rad(-89), math.rad(89))
     end
