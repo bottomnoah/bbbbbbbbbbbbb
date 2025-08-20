@@ -169,7 +169,7 @@ local Settings = {
     ThirdPerson = {
         Enabled = false, 
         ShowCharacter = false, 
-        ApplyAntiAimToCharacter = false, 
+        ApplyAntiAimToCharacter = true, 
         CameraOffsetAlwaysVisible = false, 
         ShowCharacterWhileAiming = false, 
         CameraOffsetX = 3, 
@@ -839,20 +839,27 @@ local function initializeVotekickRejoiner()
 end
 
 local startTime = os.clock()
-local lastFrameTime
+local spinAccumulator = 0
 
 local function applyAAAngles(angles)
-    local x, y, z = angles.X, angles.Y, angles.Z
+    local newAngles = angles
     local currentTime = os.clock()
     local deltaTime = currentTime - (lastFrameTime or currentTime)
     lastFrameTime = currentTime
+    
+    local x, y, z = angles.X, angles.Y, angles.Z
+    
     if Settings.AntiAim.Mode == "Spin" then
-        y = (currentTime - startTime) * math.rad(Settings.AntiAim.SpinSpeed)
+        local spinRadians = (currentTime - startTime) * math.rad(Settings.AntiAim.SpinSpeed)
+        y = spinRadians
+        newAngles = Vector3.new(x, y, z)
     elseif Settings.AntiAim.Mode == "Jitter" then
-        y = y + math.rad(math.random(-Settings.AntiAim.JitterAngle, Settings.AntiAim.JitterAngle))
+        local jitter = math.rad(math.random(-Settings.AntiAim.JitterAngle, Settings.AntiAim.JitterAngle))
+        newAngles = Vector3.new(x, y + jitter, z)
     elseif Settings.AntiAim.Mode == "Static" then
-        y = math.rad(Settings.AntiAim.StaticAngle)
+        newAngles = Vector3.new(x, math.rad(Settings.AntiAim.StaticAngle), z)
     end
+    
     if Settings.AntiAim.PitchMode == "Up" then
         x = math.clamp(x - math.rad(Settings.AntiAim.PitchAngle), math.rad(-89), math.rad(89))
     elseif Settings.AntiAim.PitchMode == "Down" then
@@ -860,7 +867,8 @@ local function applyAAAngles(angles)
     elseif Settings.AntiAim.PitchMode == "Random" then
         x = math.clamp(math.rad(math.random(-Settings.AntiAim.PitchAngle, Settings.AntiAim.PitchAngle)), math.rad(-89), math.rad(89))
     end
-    return Vector3.new(x, y, z)
+    
+    return Vector3.new(x, newAngles.Y, z)
 end
 
 -- Third Person
@@ -906,7 +914,10 @@ RunService.Heartbeat:Connect(function(ndt)
                     for i = 1, 3 do if fakeRepObject:getWeaponObjects()[i] then currentObj:buildWeapon(i) end end
                 end
                 local angles = cameraInterface:getActiveCamera():getAngles()
-                if Settings.AntiAim.Enabled and Settings.ThirdPerson.ApplyAntiAimToCharacter then angles = applyAAAngles(angles) end
+                 if Settings.AntiAim and Settings.AntiAim.Enabled and Settings.ThirdPerson.ApplyAntiAimToCharacter then
+                    angles = applyAAAngles(angles)
+                end
+    
                 local clockTime = os.clock()
                 local tickTime = tick()
                 fakeRepObject._posspring.t = position fakeRepObject._posspring.p = position
@@ -1012,31 +1023,82 @@ function network:send(name, ...)
         if name == "spawn" then
             if not started then
                 started = true
-                newSpawnCache = {currentAddition = 0, latency = 0, updateDebt = 0, spawnTime = os.clock(), spawned = true, lastUpdate = nil, lastUpdateTime = 0}
+                newSpawnCache = {
+                    currentAddition = 0,
+                    latency = 0,
+                    updateDebt = 0,
+                    spawnTime = os.clock(),
+                    spawned = true,
+                    lastUpdate = nil,
+                    lastUpdateTime = 0
+                }
                 if not currentObj then
                     if fakeRepObject then
                         currentObj = charInterface.getCharacterObject()
-                        if not currentObj then pcall(function() currentObj = thirdPersonObject.new(fakeRepObject) if currentObj then currentObj:spawn() end end) else currentObj:spawn() end
+                        if not currentObj then
+                            pcall(function()
+                                currentObj = thirdPersonObject.new(fakeRepObject)
+                                if currentObj then
+                                    currentObj:spawn()
+                                end
+                            end)
+                        else
+                            currentObj:spawn()
+                        end
+                    else
+                        warn("fakeRepObject is nil, cannot initialize third-person character")
                     end
                 end
             end
         elseif currentObj then
-            if name == "equip" then local slot = ... fakeRepObject:setActiveIndex(slot) if slot ~= 3 then currentObj:equip(slot) else currentObj:equipMelee() end
-            elseif name == "stab" then currentObj:stab()
-            elseif name == "aim" then currentObj:setAim((...))
-            elseif name == "sprint" then currentObj:setSprint((...))
-            elseif name == "stance" then currentObj:setStance((...))
+            if name == "equip" then
+                local slot = ...
+                fakeRepObject:setActiveIndex(slot)
+                if slot ~= 3 then
+                    currentObj:equip(slot)
+                else
+                    currentObj:equipMelee()
+                end
+            elseif name == "stab" then
+                currentObj:stab()
+            elseif name == "aim" then
+                local aiming = ...
+                currentObj:setAim(aiming)
+            elseif name == "sprint" then
+                local sprinting = ...
+                currentObj:setSprint(sprinting)
+            elseif name == "stance" then
+                local stance = ...
+                currentObj:setStance(stance)
+            elseif name == "newbullets" then
             end
         end
     end
+    
     if name == "repupdate" then
         local position, angles, angles2, time = ...
-        if Settings.AntiAim.Enabled then angles = applyAAAngles(angles) angles2 = Vector3.new(angles.X * 0.99, angles.Y * 0.99, angles.Z * 0.99) end
-        if newSpawnCache.updateDebt > 0 then newSpawnCache.updateDebt -= 1 return end
-        if Settings.Player.WalkSpeed.Enabled and newSpawnCache.lastUpdate then send(self, name, newSpawnCache.lastUpdate, angles, angles2, time + newSpawnCache.latency + newSpawnCache.currentAddition) newSpawnCache.updateDebt += 1 end
-        newSpawnCache.lastUpdate = position newSpawnCache.lastUpdateTime = time
+        
+        if Settings.AntiAim.Enabled then
+            angles = applyAAAngles(angles)
+            angles2 = Vector3.new(angles.X * 0.99, angles.Y * 0.99, angles.Z * 0.99)
+        end
+        
+        if newSpawnCache.updateDebt > 0 then
+            newSpawnCache.updateDebt -= 1
+            return
+        end
+        
+        if Settings.Player.WalkSpeed.Enabled and newSpawnCache.lastUpdate then
+            send(self, name, newSpawnCache.lastUpdate, angles, angles2, time + newSpawnCache.latency + newSpawnCache.currentAddition)
+            newSpawnCache.updateDebt += 1
+        end
+
+        newSpawnCache.lastUpdate = position
+        newSpawnCache.lastUpdateTime = time
+
         return send(self, name, position, angles, angles2, time + newSpawnCache.latency + newSpawnCache.currentAddition)
     end
+    
     return send(self, name, ...)
 end
 
