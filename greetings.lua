@@ -3,10 +3,11 @@
 -- Library Imports
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/bottomnoah/UI/refs/heads/main/cola.lua"))()
 local drawhelper = loadstring(game:HttpGet("https://raw.githubusercontent.com/bottomnoah/UI/refs/heads/main/drawing"))()
+local localplayer = game:GetService("Players").LocalPlayer
 local Wait = Library.subs.Wait
 
 if not getgc or not rawget then
-    game.Players.LocalPlayer:Kick("Executor must support getgc and rawget to run this script. Try Using Swift.")
+   localplayer:Kick("[dsc.gg/kaotiksoftworks]\nExecutor must support getgc and rawget to run this script. Try Using Swift.")
 end
 
 local playerModelToReplication = {}
@@ -27,6 +28,10 @@ for _, v in getgc(true) do
         break
     end
 end
+
+ if not moduleCache then 
+        localplayer:Kick('[dsc.gg/kaotiksoftworks]\nModules Not found. Do you have FFlagDebugRunParallelLuaOnMainThread set to True?');
+    end;
 
 local modules = {}
 for name, data in moduleCache do modules[name] = data.module end
@@ -80,7 +85,6 @@ getfenv(cameraInterface.setCameraType).print = function() end
 getfenv(cameraInterface.setCameraType).warn = function() end
 
 -- Globals for Third Person
-local localplayer = Players.LocalPlayer
 local currentObj, started, fakeRepObject
 local physicsignore = {workspace.Terrain, workspace.Ignore, workspace.Players, Camera}
 
