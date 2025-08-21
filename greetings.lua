@@ -832,12 +832,14 @@ local function kickAndRejoin()
 end
 
 local function initializeVotekickRejoiner()
-    local displayVoteKick = Players.LocalPlayer.PlayerGui.ChatScreenGui.Main.DisplayVoteKick
+    local chatScreenGui = localplayer.PlayerGui:WaitForChild("ChatScreenGui")
+    local displayVoteKick = chatScreenGui.Main:WaitForChild("DisplayVoteKick")
     displayVoteKick:GetPropertyChangedSignal("Visible"):Connect(function()
         if displayVoteKick.Visible and Settings.Misc.VotekickRejoiner then
+            local textTitle = displayVoteKick.TextTitle.Text
             local words = {}
-            for w in displayVoteKick.Text:gmatch("%S+") do table.insert(words, w) end
-            if words[2] == Players.LocalPlayer.Name then kickAndRejoin() end
+            for word in string.gmatch(textTitle, "%S+") do table.insert(words, word) end
+            if words[2] == localplayer.Name then kickAndRejoin() end
         end
     end)
 end
