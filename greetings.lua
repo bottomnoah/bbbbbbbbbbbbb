@@ -84,7 +84,6 @@ end
 getfenv(cameraInterface.setCameraType).print = function() end
 getfenv(cameraInterface.setCameraType).warn = function() end
 
--- Globals for Third Person
 local currentObj, started, fakeRepObject
 local physicsignore = {workspace.Terrain, workspace.Ignore, workspace.Players, Camera}
 
@@ -92,6 +91,7 @@ fakeRepObject = replicationObject.new(setmetatable({}, {
     __index = function(self, index) return localplayer[index] end,
     __newindex = function(self, index, value) localplayer[index] = value end
 }))
+
 
 -- Settings
 local Settings = {
@@ -195,7 +195,8 @@ local Settings = {
         Enabled = false, 
         HitPart = "Head", 
         UseFOV = false, 
-        WallCheck = false
+        WallCheck = false,
+        HitChance = 100,
     },
     RageBot = {
         Enabled = false, 
@@ -218,6 +219,12 @@ local Settings = {
         SmallCrosshair = false, 
         NoCrosshair = false
     }
+}
+
+local Configs = {
+    Current = "default",
+    Path = "astralis_configs/",
+    Files = {}
 }
 
 -- Crosshair Helpers
@@ -274,7 +281,118 @@ end
 
 local SilentAimFunctions = {}
 
+local ConfigListDropdown
+
 -- Utilities
+local function refreshConfigList()
+    Configs.Files = {}
+    
+    if not isfolder(Configs.Path) then
+        makefolder(Configs.Path)
+    end
+    
+    for _, file in pairs(listfiles(Configs.Path)) do
+        local fileName = file:match("([^/\\]+)$")
+        if fileName and fileName:lower():match("%.json$") then
+            local configName = fileName:match("(.+)%.json$")
+            if configName then
+                table.insert(Configs.Files, configName)
+            end
+        end
+    end
+    
+    table.sort(Configs.Files)
+    
+    if ConfigListDropdown then
+        local listToUse = #Configs.Files > 0 and Configs.Files or {"None"}
+        
+        pcall(function()
+            ConfigListDropdown:Clear()
+        end)
+        
+        for _, config in ipairs(listToUse) do
+            pcall(function()
+                ConfigListDropdown:Add(config)
+            end)
+        end
+        
+        if #Configs.Files > 0 then
+            if table.find(Configs.Files, Configs.Current) then
+                pcall(function()
+                    ConfigListDropdown:Set(Configs.Current)
+                end)
+            else
+                pcall(function()
+                    ConfigListDropdown:Set(Configs.Files[1])
+                end)
+            end
+        else
+            Configs.Current = ""
+            pcall(function()
+                ConfigListDropdown:Set("None")
+            end)
+        end
+    end
+end
+
+
+local function saveConfig(name)
+    if not name or name == "" or name == "None" then
+        Library:Notify({Text = "Please enter a valid config name"})
+        return
+    end
+    
+    if not isfolder(Configs.Path) then
+        makefolder(Configs.Path)
+    end
+    
+    local configData = {}
+    local function serializeTable(t, prefix)
+        for k, v in pairs(t) do
+            local fullKey = prefix and prefix .. "." .. k or k
+            if type(v) == "table" then
+                serializeTable(v, fullKey)
+            else
+                configData[fullKey] = v
+            end
+        end
+    end
+    
+    serializeTable(Settings)
+    writefile(Configs.Path .. name .. ".json", game:GetService("HttpService"):JSONEncode(configData))
+    
+    Configs.Current = name
+    
+    refreshConfigList()
+    Library:Notify({Text = "Config saved: " .. name})
+end
+
+
+local function deleteConfig(name)
+    if not name or name == "" or name == "None" then
+        Library:Notify({Text = "Please select a valid config to delete"})
+        return
+    end
+    
+    if not isfolder(Configs.Path) or not isfile(Configs.Path .. name .. ".json") then
+        Library:Notify({Text = "Config not found: " .. name})
+        return
+    end
+    
+    delfile(Configs.Path .. name .. ".json")
+    
+    if Configs.Current == name then
+        Configs.Current = ""
+    end
+    
+    refreshConfigList()
+    Library:Notify({Text = "Config deleted: " .. name})
+    
+    if ConfigNameTextbox and Configs.Current == "" then
+        ConfigNameTextbox:Set("")
+    end
+end
+
 local function raycast(origin, direction, filterlist)
     local params = RaycastParams.new() params.IgnoreWater = true params.FilterDescendantsInstances = filterlist or physicsignore params.FilterType = Enum.RaycastFilterType.Blacklist
     local result = workspace:Raycast(origin, direction, params)
@@ -481,7 +599,7 @@ local function initializeSilentAim()
     if not BulletInterface then warn("BulletInterface not found") return end
     local OldNewBullet = BulletInterface.newBullet
     BulletInterface.newBullet = function(BulletData)
-        if BulletData.extra and Settings.SilentAim.Enabled then
+        if BulletData.extra and Settings.SilentAim.Enabled and math.random(1, 100) <= Settings.SilentAim.HitChance then
             local HitPart = getClosestPlayer()
             if HitPart and (not Settings.SilentAim.WallCheck or isVisible(HitPart, true)) then
                 local BulletSpeed = BulletData.extra.firearmObject:getWeaponStat("bulletspeed")
@@ -550,7 +668,7 @@ local function cleanupStalePlayers()
 end
 
 local function updatePlayerModelCache()
-    playerModelToReplication = {} -- Clear existing cache
+    playerModelToReplication = {}
     
     replicationInterface.operateOnAllEntries(function(player, entry)
         local thirdPerson = entry:getThirdPersonObject()
@@ -1152,9 +1270,286 @@ callbackList["Player%%WalkSpeedValue"] = function(value)
     end
 end
 
+
+local function loadConfig(name)
+    if not name or name == "" or name == "None" then
+        Library:Notify({Text = "Please select a valid config"})
+        return
+    end
+    
+    if not isfolder(Configs.Path) or not isfile(Configs.Path .. name .. ".json") then
+        Library:Notify({Text = "Config not found: " .. name})
+        return
+    end
+    
+    local success, configData = pcall(function()
+        return game:GetService("HttpService"):JSONDecode(readfile(Configs.Path .. name .. ".json"))
+    end)
+    
+    if not success then
+        Library:Notify({Text = "Failed to load config: " .. name})
+        return
+    end
+    
+    local function applyConfigData(data, targetTable)
+        for k, v in pairs(data) do
+            local keys = {}
+            for key in string.gmatch(k, "[^.]+") do
+                table.insert(keys, key)
+            end
+            local current = targetTable
+            for i = 1, #keys - 1 do
+                current = current[keys[i]]
+                if not current then return end
+            end
+            current[keys[#keys]] = v
+        end
+    end
+    
+    applyConfigData(configData, Settings)
+    
+    if configData["Aimbot.Enabled"] ~= nil then
+        Library.Flags["AimbotEnabled"] = configData["Aimbot.Enabled"]
+        if configData["Aimbot.Enabled"] then
+            startMousePreload()
+            State.InputBeganConnection = UserInputService.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton2 then State.IsRightClickHeld = true State.TargetPart = getClosestPlayer() end end)
+            State.InputEndedConnection = UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton2 then State.IsRightClickHeld = false State.TargetPart = nil end end)
+            State.RenderSteppedConnection = RunService.RenderStepped:Connect(function() if State.IsRightClickHeld and State.TargetPart then if Settings.Aimbot.WallCheck then if isVisible(State.TargetPart, true) then aimAt() end else aimAt() end end end)
+        else
+            stopMousePreload()
+            if State.InputBeganConnection then State.InputBeganConnection:Disconnect() end 
+            if State.InputEndedConnection then State.InputEndedConnection:Disconnect() end 
+            if State.RenderSteppedConnection then State.RenderSteppedConnection:Disconnect() end
+        end
+    end
+    
+    local flagMappings = {
+        ["Aimbot.Enabled"] = "AimbotEnabled",
+        ["Aimbot.HitPart"] = "AimbotHitPart",
+        ["Aimbot.WallCheck"] = "AimbotWallCheck",
+        ["Aimbot.AutoTargetSwitch"] = "AimbotAutoTargetSwitch",
+        ["Aimbot.MaxDistance.Enabled"] = "AimbotMaxDistanceEnabled",
+        ["Aimbot.MaxDistance.Value"] = "AimbotMaxDistance",
+        ["Aimbot.Easing.Strength"] = "AimbotEasingStrength",
+        
+        ["SilentAim.Enabled"] = "SilentAimEnabled",
+        ["SilentAim.HitPart"] = "SilentAimHitPart",
+        ["SilentAim.UseFOV"] = "SilentAimUseFOV",
+        ["SilentAim.WallCheck"] = "SilentAimWallCheck",
+        ["SilentAim.HitChance"] = "SilentAimHitChance",
+        
+        ["ESP.Enabled"] = "ESPEnabled",
+        ["ESP.Features.Box.Enabled"] = "ESPBox",
+        ["ESP.Features.Tracer.Enabled"] = "ESPTracer",
+        ["ESP.Features.HeadDot.Enabled"] = "ESPHeadDot",
+        ["ESP.Features.DistanceText.Enabled"] = "ESPDistance",
+        ["ESP.Features.Name.Enabled"] = "ESPName",
+        ["ESP.Features.HealthBar.Enabled"] = "ESPHealthBar",
+        ["ESP.VisibilityCheck"] = "ESPVisibilityCheck",
+        ["ESP.MaxDistance.Enabled"] = "ESPMaxDistanceEnabled",
+        ["ESP.MaxDistance.Value"] = "ESPMaxDistance",
+        
+        ["ESP.Features.Box.Color"] = "ESPBoxColor",
+        ["ESP.Features.Tracer.Color"] = "ESPTracerColor",
+        ["ESP.Features.DistanceText.Color"] = "ESPDistanceColor",
+        ["ESP.Features.HeadDot.Color"] = "ESPHeadDotColor",
+        ["ESP.Features.Name.Color"] = "ESPNameColor",
+        ["ESP.Features.HealthBar.Color"] = "ESPHealthBarColor",
+        ["ESP.Features.HealthBar.BackgroundColor"] = "ESPHealthBarBG",
+        ["ESP.Features.HealthBar.Width"] = "ESPHealthBarWidth",
+        ["ESP.Features.HealthBar.Height"] = "ESPHealthBarHeight",
+        ["ESP.Features.HealthBar.OutlineColor"] = "ESPHealthBarOutlineColor",
+        
+        ["FOV.Enabled"] = "FOVEnabled",
+        ["FOV.FollowGun"] = "FOVFollowGun",
+        ["FOV.Filled"] = "FOVFilled",
+        ["FOV.FillColor"] = "FOVFillColor",
+        ["FOV.FillTransparency"] = "FOVFillTransparency",
+        ["FOV.OutlineColor"] = "FOVOutlineColor",
+        ["FOV.OutlineTransparency"] = "FOVOutlineTransparency",
+        ["FOV.Radius"] = "FOVRadius",
+        
+        ["Chams.Enabled"] = "ChamsEnabled",
+        ["Chams.Fill.Color"] = "ChamsFillColor",
+        ["Chams.Outline.Color"] = "ChamsOutlineColor",
+        ["Chams.Fill.Transparency"] = "ChamsFillTransparency",
+        ["Chams.Outline.Transparency"] = "ChamsOutlineTransparency",
+        
+        ["GunMods.NoRecoil"] = "NoRecoil",
+        ["GunMods.NoSpread"] = "NoSpread",
+        ["GunMods.NoSway"] = "NoSway",
+        ["GunMods.NoSniperScope"] = "NoSniperScope",
+        ["GunMods.InstantReload"] = "InstantReload",
+        ["GunMods.NoWalkSway"] = "NoWalkSway",
+        ["GunMods.NoCameraBob"] = "NoCameraBob",
+        ["GunMods.SmallCrosshair"] = "SmallCrosshair",
+        ["GunMods.NoCrosshair"] = "NoCrosshair",
+        
+        ["ThirdPerson.Enabled"] = "ThirdPersonEnabled",
+        ["ThirdPerson.ShowCharacter"] = "ThirdPersonShowCharacter",
+        ["ThirdPerson.ShowCharacterWhileAiming"] = "ThirdPersonShowCharacterWhileAiming",
+        ["ThirdPerson.CameraOffsetAlwaysVisible"] = "ThirdPersonCameraOffsetAlwaysVisible",
+        ["ThirdPerson.HideViewmodel"] = "ThirdPersonHideViewmodel",
+        ["ThirdPerson.CameraOffsetX"] = "ThirdPersonCameraOffsetX",
+        ["ThirdPerson.CameraOffsetY"] = "ThirdPersonCameraOffsetY",
+        ["ThirdPerson.CameraOffsetZ"] = "ThirdPersonCameraOffsetZ",
+        
+        ["Player.Bhop.Enabled"] = "BhopEnabled",
+        ["Player.WalkSpeed.Enabled"] = "WalkSpeedEnabled",
+        ["Player.WalkSpeed.Value"] = "WalkSpeedValue",
+        ["Player.JumpPower.Enabled"] = "JumpPowerEnabled",
+        ["Player.JumpPower.Value"] = "JumpPowerValue",
+        
+        ["AntiAim.Enabled"] = "AntiAimEnabled",
+        ["AntiAim.Mode"] = "AntiAimMode",
+        ["AntiAim.SpinSpeed"] = "AntiAimSpinSpeed",
+        ["AntiAim.JitterAngle"] = "AntiAimJitterAngle",
+        ["AntiAim.StaticAngle"] = "AntiAimStaticAngle",
+        ["AntiAim.PitchMode"] = "AntiAimPitchMode",
+        ["AntiAim.PitchAngle"] = "AntiAimPitchAngle",
+        
+        ["Crosshair.Enabled"] = "CrosshairEnabled",
+        ["Crosshair.TStyle"] = "CrosshairStyle",
+        ["Crosshair.Dot"] = "CrosshairDot",
+        ["Crosshair.Size"] = "CrosshairSize",
+        ["Crosshair.Thickness"] = "CrosshairThickness",
+        ["Crosshair.Gap"] = "CrosshairGap",
+        ["Crosshair.Color"] = "CrosshairColor",
+        ["Crosshair.Transparency"] = "CrosshairTransparency",
+        
+        ["Misc.Textures"] = "MiscTextures",
+        ["Misc.VotekickRejoiner"] = "VotekickRejoiner"
+    }
+    
+    for settingPath, flagName in pairs(flagMappings) do
+        if configData[settingPath] ~= nil then
+            Library.Flags[flagName] = configData[settingPath]
+        end
+    end
+        
+    if configData["SilentAim.Enabled"] and configData["SilentAim.Enabled"] then
+        initializeSilentAim()
+    end
+    
+    if configData["SilentAim.HitChance"] then
+        Settings.SilentAim.HitChance = configData["SilentAim.HitChance"]
+    end
+
+    if configData["ESP.Enabled"] ~= nil then
+        if configData["ESP.Enabled"] then
+            initializeESP()
+            State.PlayerCacheUpdate = RunService.Heartbeat:Connect(updatePlayerCache)
+            local last = tick()
+            local interval = 1 / 240
+            State.ESPLoop = RunService.Heartbeat:Connect(function()
+                local now = tick()
+                if now - last >= interval then
+                    renderESP()
+                    last = now
+                end
+            end)
+        else
+            if State.PlayerCacheUpdate then State.PlayerCacheUpdate:Disconnect() end
+            if State.ESPLoop then State.ESPLoop:Disconnect() end
+            for p in State.Storage.ESPCache do uncacheObject(p) end
+            State.PlayersToDraw = {}
+            State.CachedProperties = {}
+        end
+    end
+    
+    if configData["FOV.Enabled"] ~= nil then
+        Settings.FOV.Circle.Visible = configData["FOV.Enabled"]
+        Settings.FOV.OutlineCircle.Visible = configData["FOV.Enabled"]
+    end
+    
+    if configData["Chams.Enabled"] ~= nil then
+        if configData["Chams.Enabled"] then
+            State.ChamsUpdateConnection = RunService.RenderStepped:Connect(updateChams)
+        else
+            if State.ChamsUpdateConnection then
+                State.ChamsUpdateConnection:Disconnect()
+                State.ChamsUpdateConnection = nil
+            end
+            for p in State.Highlights do
+                removeHighlight(p)
+            end
+        end
+    end
+    
+    if configData["Crosshair.Enabled"] ~= nil then
+        toggleCrosshair(configData["Crosshair.Enabled"])
+    end
+    
+    if configData["ThirdPerson.Enabled"] ~= nil then
+        if charInterface.isAlive() and configData["ThirdPerson.ShowCharacter"] then
+            if configData["ThirdPerson.Enabled"] then
+                started = true
+            else
+                fakeRepObject:despawn()
+                if currentObj then
+                    currentObj:Destroy()
+                    currentObj = nil
+                    lastPos = nil
+                end
+            end
+        end
+    end
+    
+    if configData["Player.WalkSpeed.Enabled"] ~= nil then
+        callbackList["Player%%WalkSpeed"](configData["Player.WalkSpeed.Enabled"])
+    end
+    
+    if configData["AntiAim.Enabled"] ~= nil then
+        startTime = os.clock()
+        lastFrameTime = nil
+        if configData["AntiAim.Enabled"] then
+            State.AntiAimConnection = RunService.Heartbeat:Connect(function()
+                if Settings.AntiAim.Enabled and charInterface.isAlive() then
+                    local currentCharObject = charInterface.getCharacterObject()
+                    if currentCharObject then
+                        local rootPart = currentCharObject:getRealRootPart()
+                        if rootPart then
+                            local angles = cameraInterface:getActiveCamera():getAngles()
+                            local modifiedAngles = applyAAAngles(angles)
+                        end
+                    end
+                end
+            end)
+        else
+            if State.AntiAimConnection then
+                State.AntiAimConnection:Disconnect()
+                State.AntiAimConnection = nil
+            end
+        end
+    end
+    
+    if configData["Misc.Textures"] ~= nil then
+        if configData["Misc.Textures"] then
+            optimizeMap()
+        else
+            revertMap()
+        end
+    end
+    
+    if configData["Misc.VotekickRejoiner"] and configData["Misc.VotekickRejoiner"] then
+        initializeVotekickRejoiner()
+    end
+    
+    if configData["Aimbot.Easing.Strength"] then
+        updateSensitivity(configData["Aimbot.Easing.Strength"])
+    end
+    
+    Library:Notify({Text = "Config loaded: " .. name})
+    Configs.Current = name
+    
+    if ConfigNameTextbox then
+        ConfigNameTextbox:Set(name)
+    end
+end
+
 -- UI
 local Window = Library:CreateWindow({Name = "Astralis", Themeable = {Info = "dsc.gg/kaotiksoftworks"}})
-local Tabs = {Main = Window:CreateTab({Name = "Main"}), Mods = Window:CreateTab({Name = "Mods"}), Visuals = Window:CreateTab({Name = "Visuals"}), Player = Window:CreateTab({Name = "Player"}), Misc = Window:CreateTab({Name = "Misc"})}
+local Tabs = {Main = Window:CreateTab({Name = "Main"}), Mods = Window:CreateTab({Name = "Mods"}), Visuals = Window:CreateTab({Name = "Visuals"}), Player = Window:CreateTab({Name = "Player"}), Misc = Window:CreateTab({Name = "Misc"}), Configs = Window:CreateTab({Name = "Configs"})}
 
 local GunModsGroup = Tabs.Mods:CreateSection({Name = "Gun Modifications"})
 GunModsGroup:AddToggle({Name = "No Recoil", Flag = "NoRecoil", Value = Settings.GunMods.NoRecoil, Callback = function(s) Settings.GunMods.NoRecoil = s end})
@@ -1168,8 +1563,8 @@ local CamModsGroup = Tabs.Mods:CreateSection({Name = "Camera Modifications", Sid
 CamModsGroup:AddToggle({Name = "No Camera Bob", Flag = "NoCameraBob", Value = Settings.GunMods.NoCameraBob, Callback = function(s) Settings.GunMods.NoCameraBob = s end})
 
 local MiscModsGroup = Tabs.Mods:CreateSection({Name = "Misc Modifications", Side = "Right"})
-MiscModsGroup:AddToggle({Name = "Small Crosshair", Flag = "SmallCrosshair", Value = Settings.GunMods.SmallCrosshair, Callback = function(s) Settings.GunMods.SmallCrosshair = s end})
-MiscModsGroup:AddToggle({Name = "No Crosshair", Flag = "NoCrosshair", Value = Settings.GunMods.NoCrosshair, Callback = function(s) Settings.GunMods.NoCrosshair = s end})
+--MiscModsGroup:AddToggle({Name = "Small Crosshair", Flag = "SmallCrosshair", Value = Settings.GunMods.SmallCrosshair, Callback = function(s) Settings.GunMods.SmallCrosshair = s end})
+--MiscModsGroup:AddToggle({Name = "No Crosshair", Flag = "NoCrosshair", Value = Settings.GunMods.NoCrosshair, Callback = function(s) Settings.GunMods.NoCrosshair = s end})
 
 local CrosshairGroup = Tabs.Misc:CreateSection({Name = "Crosshair"})
 CrosshairGroup:AddToggle({Name = "Enabled", Flag = "CrosshairEnabled", Value = Settings.Crosshair.Enabled, Callback = function(s) Settings.Crosshair.Enabled = s toggleCrosshair(s) end})
@@ -1268,6 +1663,7 @@ AimbotGroup:AddSlider({Name = "Strength", Flag = "AimbotEasingStrength", Value =
 local SilentAimGroup = Tabs.Main:CreateSection({Name = "Silent Aim"})
 SilentAimGroup:AddToggle({Name = "Enabled", Flag = "SilentAimEnabled", Value = Settings.SilentAim.Enabled, Callback = function(s) Settings.SilentAim.Enabled = s if s then initializeSilentAim() end end})
 SilentAimGroup:AddDropdown({Name = "Hit Part", Flag = "SilentAimHitPart", List = {"Head", "Torso"}, Value = Settings.SilentAim.HitPart, Callback = function(v) Settings.SilentAim.HitPart = v end})
+SilentAimGroup:AddSlider({Name = "Hit Chance", Flag = "SilentAimHitChance", Value = Settings.SilentAim.HitChance, Min = 0, Max = 100, Rounding = 0, Callback = function(v) Settings.SilentAim.HitChance = v end})
 SilentAimGroup:AddToggle({Name = "Use FOV", Flag = "SilentAimUseFOV", Value = Settings.SilentAim.UseFOV, Callback = function(s) Settings.SilentAim.UseFOV = s end})
 SilentAimGroup:AddToggle({Name = "Wall Check", Flag = "SilentAimWallCheck", Value = Settings.SilentAim.WallCheck, Callback = function(s) Settings.SilentAim.WallCheck = s end})
 
@@ -1315,7 +1711,6 @@ ESPCustomization:AddColorPicker({Name = "Health Bar Background", Flag = "ESPHeal
     end 
 end})
 
--- Add health bar customization sliders
 local HealthBarCustomization = Tabs.Visuals:CreateSection({Name = "Health Bar Settings", Side = "Right"})
 HealthBarCustomization:AddSlider({Name = "Width", Flag = "ESPHealthBarWidth", Value = Settings.ESP.Features.HealthBar.Width, Min = 1, Max = 5, Rounding = 0, Callback = function(v) Settings.ESP.Features.HealthBar.Width = v end})
 HealthBarCustomization:AddSlider({Name = "Height", Flag = "ESPHealthBarHeight", Value = Settings.ESP.Features.HealthBar.Height, Min = 10, Max = 80, Rounding = 0, Callback = function(v) Settings.ESP.Features.HealthBar.Height = v end})
@@ -1392,6 +1787,100 @@ Optimizations:AddToggle({Name = "Toggle Textures", Flag = "MiscTextures", Value 
 
 local Safety = Tabs.Misc:CreateSection({Name = "Safety", Side = "Right"})
 Safety:AddToggle({Name = "Rejoin on Votekick", Flag = "VotekickRejoiner", Value = Settings.Misc.VotekickRejoiner, Callback = function(s) Settings.Misc.VotekickRejoiner = s if s then initializeVotekickRejoiner() end end})
+
+local ConfigGroup = Tabs.Configs:CreateSection({Name = "Configurations", Side = "Left"})
+
+local ConfigNameTextbox = ConfigGroup:AddTextBox({Name = "Config Name", Flag = "ConfigName", Value = Configs.Current, Callback = function(v) Configs.Current = v if ConfigListDropdown then pcall(function() if table.find(Configs.Files, v) then ConfigListDropdown:Set(v) end end) end end})
+
+local ConfigListDropdown
+local function createConfigDropdown()
+    if ConfigListDropdown then
+        pcall(function()
+            ConfigListDropdown:Remove()
+            ConfigListDropdown = nil
+        end)
+    end
+    
+    local listToUse = #Configs.Files > 0 and Configs.Files or {"None"}
+    local valueToUse = (#Configs.Files > 0 and Configs.Current and table.find(Configs.Files, Configs.Current)) and Configs.Current or listToUse[1]
+    
+    ConfigListDropdown = ConfigGroup:AddDropdown({
+        Name = "Config List",
+        List = listToUse,
+        Value = valueToUse,
+        Callback = function(selected)
+            if selected and selected ~= "None" then
+                Configs.Current = selected
+                if ConfigNameTextbox then
+                    pcall(function()
+                        ConfigNameTextbox:Set(selected)
+                    end)
+                end
+            else
+                Configs.Current = ""
+                if ConfigNameTextbox then
+                    pcall(function()
+                        ConfigNameTextbox:Set("")
+                    end)
+                end
+            end
+        end
+    })
+end
+
+task.spawn(function()
+    task.wait(0.1)
+    refreshConfigList()
+    createConfigDropdown()
+end)
+
+ConfigGroup:AddButton({
+    Name = "Save Config",
+    Callback = function()
+        local configName = Library.Flags.ConfigName or Configs.Current
+        if configName and configName ~= "" and configName ~= "None" then
+            saveConfig(configName)
+            refreshConfigList()
+        else
+            Library:Notify({Text = "Please enter a valid config name"})
+        end
+    end
+})
+
+ConfigGroup:AddButton({
+    Name = "Load Config",
+    Callback = function()
+        local configName = Library.Flags.ConfigName or Configs.Current
+        if configName and configName ~= "" and configName ~= "None" then
+            loadConfig(configName)
+            refreshConfigList()
+        else
+            Library:Notify({Text = "Please select or enter a valid config name"})
+        end
+    end
+})
+
+ConfigGroup:AddButton({
+    Name = "Delete Config",
+    Callback = function()
+        local configName = Library.Flags.ConfigName or Configs.Current
+        if configName and configName ~= "" and configName ~= "None" then
+            deleteConfig(configName)
+            refreshConfigList()
+        else
+            Library:Notify({Text = "Please select or enter a valid config name"})
+        end
+    end
+})
+
+ConfigGroup:AddButton({
+    Name = "Refresh List",
+    Callback = function()
+        refreshConfigList()
+        createConfigDropdown()
+        Library:Notify({Text = "Config list refreshed"})
+    end
+})
 
 Camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateFOVCirclePosition)
 RunService.Heartbeat:Connect(updateFOVCirclePosition)
